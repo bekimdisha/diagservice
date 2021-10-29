@@ -55,9 +55,9 @@ Resources:
       Port: 80
       Protocol: HTTP
       Matcher:
-        HttpCode: '200,301,404'
+        HttpCode: '200,301'
       HealthCheckIntervalSeconds: 300
-      HealthCheckPath: /
+      HealthCheckPath: /healthz
       HealthCheckProtocol: HTTP
       HealthCheckTimeoutSeconds: 120
       HealthyThresholdCount: 2
@@ -76,14 +76,8 @@ Resources:
       Port: 80
       Protocol: HTTP
       DefaultActions:
-        - Type: redirect
-          RedirectConfig:
-            Host: "#{host}"
-            Path: "/#{path}"
-            Port: 443
-            Protocol: HTTPS
-            Query: "#{query}"
-            StatusCode: HTTP_301
+        - Type: forward
+          TargetGroupArn: !Ref PublicAlbDefaultTargetGroup
 
   PublicAlbListenerForHttps:
     Condition: hasSSL

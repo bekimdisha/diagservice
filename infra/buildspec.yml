@@ -35,6 +35,7 @@ phases:
       - $(aws ecr get-login --no-include-email --region $REGION)
       - docker login -u $DOCKER_USER -p $DOCKER_PASS
       - docker build --tag $REPOSITORY_URI:$IMAGE_TAG .
+      - docker run $REPOSITORY_URI:$IMAGE_TAG bash -c "python tests.py"
       - ecs-cli push -r $REGION $REPOSITORY_URI:$IMAGE_TAG
       - echo "Deploying Backend Resources..."
       - aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-${TYPE_PROJECT}-service-elb --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/service/cloudformation/service-elb.yml --parameter-overrides ClusterName=${CLUSTER_NAME} TypeProject=${TYPE_PROJECT} DomainName=${DOMAIN_NAME} CertificateArn=${ALB_DEFAULT_ACM_CERTIFICATE_ARN} ContainerNetworkMode=${CONTAINER_NETWORK_MODE} ContainerPort=${CONTAINER_PORT} AlbHealthCheckInterval=${ALB_HEALTHY_INTERVAL}  AlbHealthCheckPath=${ALB_HEALTHY_PATH} AlbHealthCheckTimeout=${ALB_HEALTHY_TIMEOUT} AlbHealthCheckHealthyThreshold=${ALB_HEALTHY_THRESHOLD} AlbHealthCheckUnhealthyThreshold=${ALB_UNHEALTHY_THRESHOLD} HasHTTPS=${HAS_HTTPS} SiteTgPriority=$TG_PRIORITY     
