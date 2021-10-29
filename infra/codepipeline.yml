@@ -192,6 +192,8 @@ Resources:
             Value: !Sub '{{resolve:ssm:/codepipeline/DOCKER_USER:1}}'
           - Name: DOCKER_PASS
             Value: !Sub '{{resolve:ssm:/codepipeline/DOCKER_PASS:1}}'
+          - Name: ECS_S3_BUCKET
+            Value: !Ref ArtifactBucket
       Name: !Ref AWS::StackName
       ServiceRole: !Ref CodeBuildServiceRole
 

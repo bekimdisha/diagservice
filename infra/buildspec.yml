@@ -14,12 +14,11 @@ phases:
       - export $(xargs < infra/config/${TYPE_PROJECT}.yml)
       - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
       - IMAGE_TAG=$(date  +"%s")
-      - chmod +x infra/service/utils/getTargetGroupPriority.sh
-      - SITE_TG_PRIORITY=$(./infra/service/utils/getTargetGroupPriority.sh ${DOMAIN_NAME})
   build:
     commands:
       - |
           if [ ${DEPLOY_CLUSTER} = "true" ] ; then
+            aws s3 cp devops/cluster/cloudformation/awslogs.conf s3://${ECS_S3_BUCKET}/cloudformation/awslogs.conf --region ${REGION}
             echo "Validating Cluster Templates..."
             aws cloudformation validate-template --region ${REGION} --template-body file://infra/cluster/cloudformation/cluster-vpc.yml
             aws cloudformation validate-template --region ${REGION} --template-body file://infra/cluster/cloudformation/cluster-elb.yml
@@ -27,17 +26,18 @@ phases:
             echo "Deploying ${CLUSTER_NAME} Cluster..."
             aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-cluster-vpc --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/cluster/cloudformation/cluster-vpc.yml --parameter-overrides ClusterName=${CLUSTER_NAME} CidrIp=${VPC_CIDR_IP} IpSubnet1=${VPC_IP_SUBNET_1} IpSubnet2=${VPC_IP_SUBNET_2} IpSubnet3=${VPC_IP_SUBNET_3} IpSubnet4=${VPC_IP_SUBNET_4}
             aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-cluster-elb --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/cluster/cloudformation/cluster-elb.yml --parameter-overrides ClusterName=${CLUSTER_NAME} DefaultAcmCertificateArn=${ALB_DEFAULT_ACM_CERTIFICATE_ARN} HasHTTPS=${HAS_HTTPS}
-            aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-cluster-ecs --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/cluster/cloudformation/cluster-ecs.yml --parameter-overrides ClusterName=${CLUSTER_NAME} ECSInstanceType=${ECS_INSTANCE_TYPE} KeyName=${ECS_KEY_NAME} AsgServiceMin=${ECS_ASG_SERVICE_MIN} AsgServiceDesired=${ECS_ASG_SERVICE_DESIRED} AsgServiceMax=${ECS_ASG_SERVICE_MAX} S3Bucket=${ECS_S3_BUCKET} EcsImage=${ECS_IMAGE} EbsEncrypted=${ECS_EBS_ENCRYPED}
+            aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-cluster-ecs --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/cluster/cloudformation/cluster-ecs.yml --parameter-overrides ClusterName=${CLUSTER_NAME} ECSInstanceType=${ECS_INSTANCE_TYPE} KeyName=${ECS_KEY_NAME} AsgServiceMin=${ECS_ASG_SERVICE_MIN} AsgServiceDesired=${ECS_ASG_SERVICE_DESIRED} AsgServiceMax=${ECS_ASG_SERVICE_MAX} S3Bucket=${ECS_S3_BUCKET} EbsEncrypted=${ECS_EBS_ENCRYPED}
           fi
       - echo "Validating Backend Templates..."
       - aws cloudformation validate-template --region ${REGION} --template-body file://infra/service/cloudformation/service-elb.yml
       - aws cloudformation validate-template --region ${REGION} --template-body file://infra/service/cloudformation/service-ecs.yml
       - echo "Building Docker Image..."
       - $(aws ecr get-login --no-include-email --region $REGION)
+      - docker login -u $DOCKER_USER -p $DOCKER_PASS
       - docker build --tag $REPOSITORY_URI:$IMAGE_TAG .
       - ecs-cli push -r $REGION $REPOSITORY_URI:$IMAGE_TAG
       - echo "Deploying Backend Resources..."
-      - aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-${TYPE_PROJECT}-service-elb --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/service/cloudformation/service-elb.yml --parameter-overrides ClusterName=${CLUSTER_NAME} TypeProject=${TYPE_PROJECT} DomainName=${DOMAIN_NAME} CertificateArn=${ALB_DEFAULT_ACM_CERTIFICATE_ARN} ContainerNetworkMode=${CONTAINER_NETWORK_MODE} ContainerPort=${CONTAINER_PORT} AlbHealthCheckInterval=${ALB_HEALTHY_INTERVAL}  AlbHealthCheckPath=${ALB_HEALTHY_PATH} AlbHealthCheckTimeout=${ALB_HEALTHY_TIMEOUT} AlbHealthCheckHealthyThreshold=${ALB_HEALTHY_THRESHOLD} AlbHealthCheckUnhealthyThreshold=${ALB_UNHEALTHY_THRESHOLD} HasHTTPS=${HAS_HTTPS} SiteTgPriority=$SITE_TG_PRIORITY     
+      - aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-${TYPE_PROJECT}-service-elb --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/service/cloudformation/service-elb.yml --parameter-overrides ClusterName=${CLUSTER_NAME} TypeProject=${TYPE_PROJECT} DomainName=${DOMAIN_NAME} CertificateArn=${ALB_DEFAULT_ACM_CERTIFICATE_ARN} ContainerNetworkMode=${CONTAINER_NETWORK_MODE} ContainerPort=${CONTAINER_PORT} AlbHealthCheckInterval=${ALB_HEALTHY_INTERVAL}  AlbHealthCheckPath=${ALB_HEALTHY_PATH} AlbHealthCheckTimeout=${ALB_HEALTHY_TIMEOUT} AlbHealthCheckHealthyThreshold=${ALB_HEALTHY_THRESHOLD} AlbHealthCheckUnhealthyThreshold=${ALB_UNHEALTHY_THRESHOLD} HasHTTPS=${HAS_HTTPS} SiteTgPriority=$TG_PRIORITY     
       - aws cloudformation deploy --region ${REGION} --stack-name ${CLUSTER_NAME}-${TYPE_PROJECT}-service-ecs --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --template-file infra/service/cloudformation/service-ecs.yml --parameter-overrides ClusterName=${CLUSTER_NAME} TypeProject=${TYPE_PROJECT} EcsTasksNumber=${ECS_TASK_NUMBER} ContainerPort=${CONTAINER_PORT} ContainerVirtualCPUs=${CONTAINER_CPU} ContainerMemoryMin=${CONTAINER_MEMORY_MIN} ContainerMemoryMax=${CONTAINER_MEMORY_MAX} DockerImageTag=${IMAGE_TAG} ContainerNetworkMode=${CONTAINER_NETWORK_MODE} EcsTypePlacementStrategy=${ECS_PLACEMENT_STRATEGY} EcsFieldPlacementStrategy=${ECS_FIELD_PLACEMENT_STRATEGY} 
 
   post_build:
