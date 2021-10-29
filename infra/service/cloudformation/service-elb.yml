@@ -76,7 +76,7 @@ Resources:
       Certificates:
         - CertificateArn: !Ref CertificateArn
       ListenerArn:
-        'Fn::ImportValue': !Sub ${ClusterName}InternalAlbListenerForHttps
+        'Fn::ImportValue': !Sub ${ClusterName}BackendAlbListenerForHttps
 
   SiteNameListenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
@@ -84,8 +84,8 @@ Resources:
       ListenerArn:
         !If
           - hasSSL
-          - 'Fn::ImportValue': !Sub ${ClusterName}InternalAlbListenerForHttps
-          - 'Fn::ImportValue': !Sub ${ClusterName}InternalAlbListenerForHttp
+          - 'Fn::ImportValue': !Sub ${ClusterName}BackendAlbListenerForHttps
+          - 'Fn::ImportValue': !Sub ${ClusterName}BackendAlbListenerForHttp
       Priority: !Ref SiteTgPriority
       Conditions:
         - Field: host-header

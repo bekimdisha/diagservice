@@ -62,11 +62,9 @@ Resources:
   Service:
     Type: AWS::ECS::Service
     Properties:
-      ServiceName: !Sub ${ClusterName}__${TypeProject}
+      ServiceName: !Sub ${ClusterName}_${TypeProject}
       Cluster:
         'Fn::ImportValue': !Sub ${ClusterName}ECSCluster
-      Role:
-        'Fn::ImportValue': !Sub ${ClusterName}ECSRoleArn
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref EcsTasksNumber
       DeploymentConfiguration:
@@ -76,7 +74,7 @@ Resources:
         - ContainerName: !Sub Application__${TypeProject}__${ClusterName}
           ContainerPort: !Ref ContainerPort
           TargetGroupArn:
-            'Fn::ImportValue': !Sub ${ClusterName}${TypeProject}-tg
+            'Fn::ImportValue': !Sub ${ClusterName}-tg-${TypeProject}
         - ContainerName: !Sub Application__${TypeProject}__${ClusterName}
           ContainerPort: !Ref ContainerPort
           TargetGroupArn:
@@ -88,7 +86,22 @@ Resources:
       PlacementConstraints:
         - Type: distinctInstance
         - Type: memberOf
-          Expression: 'attribute:cluster_type == api'
+          Expression: "attribute:cluster_type == api"
+      NetworkConfiguration:
+        !If
+          - hasServiceDiscovery
+          - AwsvpcConfiguration:
+              SecurityGroups:
+                - 'Fn::ImportValue': !Sub ${ClusterName}InternalAccessSecurityGroup
+              Subnets:
+                - 'Fn::ImportValue': !Sub ${ClusterName}PrivateSubnet1
+                - 'Fn::ImportValue': !Sub ${ClusterName}PrivateSubnet2
+          - !Ref AWS::NoValue
+      ServiceRegistries:
+        !If
+          - hasServiceDiscovery
+          - - RegistryArn: !Sub arn:aws:servicediscovery:${AWS::Region}:${AWS::AccountId}:service/${ServiceDiscoveryService}
+          - !Ref AWS::NoValue
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
