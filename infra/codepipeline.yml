@@ -1,0 +1,242 @@
+Parameters:
+  # General Parameters
+  ClusterName:
+    Type: String
+    Default: prod
+
+  TypeProject:
+    Type: String
+    Default: diagservice
+
+  # CodePipeline Parameters
+  GitHubRepo:
+    Type: String
+    Default: diagservice
+
+  GitHubBranch:
+    Type: String
+    Default: main
+  GitHubToken:
+    Type: String
+    NoEcho: true
+
+  GitHubUser:
+    Type: String
+    Default: bekimdisha
+
+  DeployCluster:
+    Type: String
+
+Resources:
+  Repository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${ClusterName}-codepipeline-${TypeProject}"
+
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub cfn-${AWS::StackName}
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "cloudformation.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - ecs:*
+                  - ecr:*
+                  - iam:*
+                  - application-autoscaling:*
+                  - ec2:*
+                  - elasticloadbalancing:*
+                  - ssm:*
+                  - route53:*
+                  - cloudwatch:*
+                  - events:*
+                  - secretsmanager:*
+                  - autoscaling:*
+                  - rds:*
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub cb-${AWS::StackName}
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codebuild.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:GetAuthorizationToken
+                  - cloudformation:*
+              - Resource: !Sub arn:aws:s3:::${ArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${Repository}
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+              - Resource: "*"
+                Effect: Allow
+                Action: "*"
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub cp-${AWS::StackName}
+      Path: /
+      AssumeRolePolicyDocument: |
+        {
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": [ "codepipeline.amazonaws.com" ]},
+                "Action": [ "sts:AssumeRole" ]
+            }]
+        }
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource:
+                  - !Sub arn:aws:s3:::*
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - cloudformation:*
+                  - iam:PassRole
+                  - codestar:*
+                  - codestar-connections:*
+                  - s3:*
+                  - secretsmanager:*
+                  - ec2:*
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ClusterName}-${AWS::AccountId}-codepipeline-${TypeProject}"
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Location: !Ref ArtifactBucket
+        Type: "S3"
+      Source:
+        Location: !Sub ${ArtifactBucket}/source.zip
+        Type: "S3"
+        BuildSpec: infra/buildspec.yml
+      Environment:
+        ComputeType: "BUILD_GENERAL1_LARGE"
+        Image: "aws/codebuild/standard:5.0"
+        Type: "LINUX_CONTAINER"
+        PrivilegedMode: true
+        EnvironmentVariables:
+          # General Parameters
+          - Name: CLUSTER_NAME
+            Value: !Ref ClusterName
+          - Name: TYPE_PROJECT
+            Value: !Ref TypeProject
+          - Name: REGION
+            Value: !Ref AWS::Region
+          - Name: REPOSITORY_URI
+            Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Repository}
+          - Name: ACCOUNT_ID
+            Value: !Sub ${AWS::AccountId}
+          - Name: DEPLOY_CLUSTER
+            Value: !Ref DeployCluster
+          - Name: DOCKER_USER 
+            Value: !Sub '{{resolve:ssm:/codepipeline/DOCKER_USER:1}}'
+          - Name: DOCKER_PASS
+            Value: !Sub '{{resolve:ssm:/codepipeline/DOCKER_PASS:1}}'
+      Name: !Ref AWS::StackName
+      ServiceRole: !Ref CodeBuildServiceRole
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ClusterName}-codepipeline-${TypeProject}"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Origin
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: !Ref GitHubUser
+                Repo: !Ref GitHubRepo
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+              OutputArtifacts:
+                - Name: Origin
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              InputArtifacts:
+                - Name: Origin
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+                PrimarySource: App
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+Outputs:
+  PipelineUrl:
+    Value: !Sub https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${Pipeline}

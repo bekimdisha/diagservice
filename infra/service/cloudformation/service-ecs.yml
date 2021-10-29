@@ -1,0 +1,187 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Sets Up Service Api
+
+Parameters:
+  # General Parameters
+  ClusterName:
+    Type: String
+
+  TypeProject:
+    Type: String
+
+  EcsTasksNumber:
+    Type: String
+
+  ContainerPort:
+    Type: String
+
+  ContainerVirtualCPUs:
+    Type: String
+
+  ContainerMemoryMin:
+    Type: String
+
+  ContainerMemoryMax:
+    Type: String
+
+  DockerImageTag:
+    Type: String
+
+  ContainerNetworkMode:
+    Type: String
+
+  EcsTypePlacementStrategy:
+    Type: String
+
+  EcsFieldPlacementStrategy:
+    Type: String
+
+  # AutoScaling Parameters
+  EcsTasksMax:
+    Type: String
+    Default: 3
+
+  EcsTasksMin:
+    Type: String
+    Default: 1
+
+  EcsScaleOutRate:
+    Type: String
+    Default: 300
+
+  EcsScaleInRate:
+    Type: String
+    Default: 200
+
+Conditions:
+  hasOnlyOneTask: !Equals [!Ref EcsTasksNumber, '1']
+  containerHasMemoryLimit: !Not [!Equals [!Ref ContainerMemoryMax, 'LIMITLESS']]
+  hasServiceDiscovery: !Equals [!Ref ContainerNetworkMode, 'awsvpc']
+
+Resources:
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${ClusterName}__${TypeProject}
+      Cluster:
+        'Fn::ImportValue': !Sub ${ClusterName}ECSCluster
+      Role:
+        'Fn::ImportValue': !Sub ${ClusterName}ECSRoleArn
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref EcsTasksNumber
+      DeploymentConfiguration:
+        MinimumHealthyPercent: !If [hasOnlyOneTask, 0, 50]
+        MaximumPercent: 100
+      LoadBalancers:
+        - ContainerName: !Sub Application__${TypeProject}__${ClusterName}
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn:
+            'Fn::ImportValue': !Sub ${ClusterName}${TypeProject}-tg
+        - ContainerName: !Sub Application__${TypeProject}__${ClusterName}
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn:
+            'Fn::ImportValue': !Sub ${ClusterName}BackendAlbDefaultTargetGroup
+      HealthCheckGracePeriodSeconds: 200
+      PlacementStrategies:
+        - Type: !Sub ${EcsTypePlacementStrategy}
+          Field: !Sub ${EcsFieldPlacementStrategy}
+      PlacementConstraints:
+        - Type: distinctInstance
+        - Type: memberOf
+          Expression: 'attribute:cluster_type == api'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${TypeProject}__${ClusterName}
+      NetworkMode: !Ref ContainerNetworkMode
+      ContainerDefinitions:
+        - Name: !Sub Application__${TypeProject}__${ClusterName}
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ClusterName}-codepipeline-${TypeProject}:${DockerImageTag}
+          PortMappings:
+            - HostPort: 0
+              ContainerPort: !Ref ContainerPort
+          Essential: true
+          MemoryReservation: !Ref ContainerMemoryMin
+          Memory: !If [containerHasMemoryLimit, !Ref ContainerMemoryMax, !Ref 'AWS::NoValue']
+          Cpu: !Ref ContainerVirtualCPUs
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub /ecs-cluster/${ClusterName}
+              awslogs-stream-prefix: /ecs-task-output
+              awslogs-region: !Ref AWS::Region
+          Environment:
+            - Name: CLUSTER_NAME
+              Value: !Ref ClusterName
+
+  ServiceDiscoveryService:
+    Condition: hasServiceDiscovery
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Description: !Sub '${ClusterName}-ServiceDiscovery'
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 5
+        NamespaceId:
+          'Fn::ImportValue': !Sub ${ClusterName}PrivateNameSpace
+      HealthCheckCustomConfig:
+        FailureThreshold: 2
+      Name: !Sub ${TypeProject}
+
+  WebScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: Service
+    Properties:
+      MaxCapacity: !Ref EcsTasksMax
+      MinCapacity: !Ref EcsTasksMin
+      ResourceId: !Sub service/${ClusterName}/${Service.Name}
+      RoleARN:
+        'Fn::ImportValue': !Sub ${ClusterName}ECSRoleArn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  WebEcsScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${ClusterName}_${TypeProject}__WebEcsScaleOut
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref WebScalableTarget
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: !Ref EcsScaleOutRate
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+
+  WebEcsScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: WebEcsScaleOutPolicy
+    Properties:
+      PolicyName: !Sub ${ClusterName}_${TypeProject}__WebEcsScaleIn
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref WebScalableTarget
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: !Ref EcsScaleInRate
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+
+Outputs:
+  WebEcsScaleOutPolicy:
+    Value: !Ref WebEcsScaleOutPolicy
+    Export:
+      Name: !Sub ${ClusterName}-${TypeProject}WebEcsScaleOut
+
+  WebEcsScaleInPolicy:
+    Value: !Ref WebEcsScaleInPolicy
+    Export:
+      Name: !Sub ${ClusterName}-${TypeProject}WebEcsScaleIn

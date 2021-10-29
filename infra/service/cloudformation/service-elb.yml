@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Sets Up Service Elb
+Parameters:
+  ClusterName:
+    Type: String
+
+  TypeProject:
+    Type: String
+
+  DomainName:
+    Type: String
+
+  SiteTgPriority:
+    Type: String
+
+  CertificateArn:
+    Type: String
+
+  ContainerNetworkMode:
+    Type: String
+
+  ContainerPort:
+    Type: String
+
+  AlbHealthCheckInterval:
+    Type: String
+
+  AlbHealthCheckPath:
+    Type: String
+
+  AlbHealthCheckTimeout:
+    Type: String
+
+  AlbHealthCheckHealthyThreshold:
+    Type: String
+
+  AlbHealthCheckUnhealthyThreshold:
+    Type: String
+
+  HasHTTPS:
+    Type: String
+
+Conditions:
+  hasSSL: !Equals [!Ref HasHTTPS, "true"]
+  hasServiceDiscovery: !Equals [!Ref ContainerNetworkMode, "awsvpc"]
+
+Resources:
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ClusterName}-tg-${TypeProject}
+      VpcId:
+        'Fn::ImportValue': !Sub ${ClusterName}VPC
+      Protocol: HTTP
+      TargetType: !If [ hasServiceDiscovery, "ip", "instance" ]
+      Port: !Ref ContainerPort
+      Matcher:
+        HttpCode: '200,301'
+      HealthCheckIntervalSeconds: !Ref AlbHealthCheckInterval
+      HealthCheckPath: !Ref AlbHealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: !Ref AlbHealthCheckTimeout
+      HealthyThresholdCount: !Ref AlbHealthCheckHealthyThreshold
+      UnhealthyThresholdCount: !Ref AlbHealthCheckUnhealthyThreshold
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
+        - Key: stickiness.enabled
+          Value: true
+
+  ListenerCertificate:
+    Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+    Condition: hasSSL
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      ListenerArn:
+        'Fn::ImportValue': !Sub ${ClusterName}InternalAlbListenerForHttps
+
+  SiteNameListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        !If
+          - hasSSL
+          - 'Fn::ImportValue': !Sub ${ClusterName}InternalAlbListenerForHttps
+          - 'Fn::ImportValue': !Sub ${ClusterName}InternalAlbListenerForHttp
+      Priority: !Ref SiteTgPriority
+      Conditions:
+        - Field: host-header
+          Values:
+            - !Ref DomainName
+      Actions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      Priority: !Ref SiteTgPriority
+
+Outputs:
+  TargetGroup:
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub ${ClusterName}-tg-${TypeProject}
+  TargetGroupFullName:
+    Value: !Sub ${TargetGroup.TargetGroupFullName}
+    Export:
+      Name: !Sub ${ClusterName}-tg-${TypeProject}-TargetGroupFullName
